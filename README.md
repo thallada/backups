@@ -31,6 +31,8 @@ It's best to set up a cronjobs for the backup and integrity check:
 ```
 crontab -e
 # enter same command above but with absolute paths and prefixed with a cron schedule expression (see https://crontab.guru/)
+# note that I use output redirection instead of the `log-file` option in the crontab because I want ALL ouput including errors redirected to the log
+3 3 * * * /home/user/backups/backup.sh --password-file /home/user/.restic-repo-password --healthcheck https://hc-ping.com/slug/repo-backup /home/user/folder sftp:storage-server:/backups/repo --verbose >> /home/user/logs/repo-backup.log 2>&1
 ```
 
 ## Monitor
