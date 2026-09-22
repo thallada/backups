@@ -22,7 +22,7 @@ COMPRESSION="auto"
 
 # Function to display usage
 usage() {
-    cat << EOF
+    cat <<EOF
 Usage: $0 [OPTIONS] <source_path> <repository>
 
 Generic backup script using Restic for any folder and repository.
@@ -84,13 +84,13 @@ EOF
 # Function to log messages
 log_message() {
     local message="$(date '+%Y-%m-%d %H:%M:%S') - $1"
-    
+
     if [ "$VERBOSE" = true ]; then
         echo "$message"
     fi
-    
+
     if [ -n "$LOG_FILE" ]; then
-        echo "$message" >> "$LOG_FILE"
+        echo "$message" >>"$LOG_FILE"
     fi
 }
 
@@ -98,24 +98,24 @@ log_message() {
 send_healthcheck() {
     local status="$1"
     local message="$2"
-    
+
     if [ -z "$HEALTHCHECK_URL" ]; then
         [ "$VERBOSE" = true ] && echo "Healthcheck: $status - $message (no URL configured)"
         return
     fi
-    
+
     case "$status" in
-        "START")
-            curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL/start" >/dev/null 2>&1 || true
-            ;;
-        "SUCCESS")
-            curl -fsS -m 10 --retry 3 --data-raw "$message" "$HEALTHCHECK_URL" >/dev/null 2>&1 || true
-            ;;
-        "FAILED"|"WARNING")
-            curl -fsS -m 10 --retry 3 --data-raw "$message" "$HEALTHCHECK_URL/fail" >/dev/null 2>&1 || true
-            ;;
+    "START")
+        curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL/start" >/dev/null 2>&1 || true
+        ;;
+    "SUCCESS")
+        curl -fsS -m 10 --retry 3 --data-raw "$message" "$HEALTHCHECK_URL" >/dev/null 2>&1 || true
+        ;;
+    "FAILED" | "WARNING")
+        curl -fsS -m 10 --retry 3 --data-raw "$message" "$HEALTHCHECK_URL/fail" >/dev/null 2>&1 || true
+        ;;
     esac
-    
+
     [ "$VERBOSE" = true ] && echo "Healthcheck sent: $status - $message"
 }
 
@@ -126,87 +126,87 @@ POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -p|--password-file)
-            RESTIC_PASSWORD_FILE="$2"
-            shift 2
-            ;;
-        -l|--log-file)
-            LOG_FILE="$2"
-            shift 2
-            ;;
-        -h|--healthcheck)
-            HEALTHCHECK_URL="$2"
-            shift 2
-            ;;
-        -t|--tag)
-            CUSTOM_TAGS+=("$2")
-            shift 2
-            ;;
-        --tag-prefix)
-            TAG_PREFIX="$2"
-            shift 2
-            ;;
-        --keep-daily)
-            KEEP_DAILY="$2"
-            shift 2
-            ;;
-        --keep-weekly)
-            KEEP_WEEKLY="$2"
-            shift 2
-            ;;
-        --keep-monthly)
-            KEEP_MONTHLY="$2"
-            shift 2
-            ;;
-        --keep-yearly)
-            KEEP_YEARLY="$2"
-            shift 2
-            ;;
-        -e|--exclude)
-            EXCLUDE_PATTERNS+=("$2")
-            shift 2
-            ;;
-        --no-exclude-caches)
-            EXCLUDE_CACHES=false
-            shift
-            ;;
-        --no-one-file-system)
-            ONE_FILE_SYSTEM=false
-            shift
-            ;;
-        --compression)
-            case "$2" in
-                auto|max|off|fastest|better)
-                    COMPRESSION="$2"
-                    ;;
-                *)
-                    echo "Error: Invalid compression value '$2'. Valid values: auto, max, off, fastest, better"
-                    exit 1
-                    ;;
-            esac
-            shift 2
-            ;;
-        --dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        -v|--verbose)
-            VERBOSE=true
-            shift
-            ;;
-        --help)
-            usage
-            exit 0
-            ;;
-        -*)
-            echo "Unknown option $1"
-            usage
-            exit 1
+    -p | --password-file)
+        RESTIC_PASSWORD_FILE="$2"
+        shift 2
+        ;;
+    -l | --log-file)
+        LOG_FILE="$2"
+        shift 2
+        ;;
+    -h | --healthcheck)
+        HEALTHCHECK_URL="$2"
+        shift 2
+        ;;
+    -t | --tag)
+        CUSTOM_TAGS+=("$2")
+        shift 2
+        ;;
+    --tag-prefix)
+        TAG_PREFIX="$2"
+        shift 2
+        ;;
+    --keep-daily)
+        KEEP_DAILY="$2"
+        shift 2
+        ;;
+    --keep-weekly)
+        KEEP_WEEKLY="$2"
+        shift 2
+        ;;
+    --keep-monthly)
+        KEEP_MONTHLY="$2"
+        shift 2
+        ;;
+    --keep-yearly)
+        KEEP_YEARLY="$2"
+        shift 2
+        ;;
+    -e | --exclude)
+        EXCLUDE_PATTERNS+=("$2")
+        shift 2
+        ;;
+    --no-exclude-caches)
+        EXCLUDE_CACHES=false
+        shift
+        ;;
+    --no-one-file-system)
+        ONE_FILE_SYSTEM=false
+        shift
+        ;;
+    --compression)
+        case "$2" in
+        auto | max | off | fastest | better)
+            COMPRESSION="$2"
             ;;
         *)
-            POSITIONAL_ARGS+=("$1")
-            shift
+            echo "Error: Invalid compression value '$2'. Valid values: auto, max, off, fastest, better"
+            exit 1
             ;;
+        esac
+        shift 2
+        ;;
+    --dry-run)
+        DRY_RUN=true
+        shift
+        ;;
+    -v | --verbose)
+        VERBOSE=true
+        shift
+        ;;
+    --help)
+        usage
+        exit 0
+        ;;
+    -*)
+        echo "Unknown option $1"
+        usage
+        exit 1
+        ;;
+    *)
+        POSITIONAL_ARGS+=("$1")
+        shift
+        ;;
     esac
 done
 
@@ -294,7 +294,7 @@ send_healthcheck "START" "Starting backup of $BACKUP_NAME"
 # Pre-backup: Check repository connectivity
 log_message "Checking repository connectivity..."
 CONNECTIVITY_OUTPUT=""
-if ! CONNECTIVITY_OUTPUT=$(eval "$RESTIC_CMD snapshots --last" 2>&1); then
+if ! CONNECTIVITY_OUTPUT=$(eval "$RESTIC_CMD snapshots --latest 1" 2>&1); then
     log_message "WARNING: Could not connect to repository or no snapshots exist yet"
     if [ "$VERBOSE" = true ]; then
         log_message "Connectivity check output: $CONNECTIVITY_OUTPUT"
@@ -331,13 +331,13 @@ if [ "$BACKUP_SUCCESS" = true ]; then
     if [ "$VERBOSE" = true ] && [ -n "${BACKUP_OUTPUT:-}" ]; then
         echo "$BACKUP_OUTPUT"
     fi
-    
+
     # Clean up old snapshots according to retention policy
     log_message "Applying retention policy..."
     FORGET_OUTPUT=""
     if FORGET_OUTPUT=$(eval "$RESTIC_CMD forget --tag $BACKUP_NAME --keep-daily $KEEP_DAILY --keep-weekly $KEEP_WEEKLY --keep-monthly $KEEP_MONTHLY --keep-yearly $KEEP_YEARLY --prune" 2>&1); then
         log_message "Retention policy applied successfully"
-        
+
         # Get backup stats for healthcheck message
         BACKUP_STATS=""
         BACKUP_STATS=$(eval "$RESTIC_CMD stats --mode raw-data" 2>/dev/null | tail -n 3 | head -n 1 2>/dev/null || echo "Stats unavailable")
