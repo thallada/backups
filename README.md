@@ -20,6 +20,12 @@ Run the first backup manually in the shell, e.g.:
 
 **NOTE: unfortunately there's something wrong with the script and it does not output anything to the log unless the `--verbose` flag is passed so I just always pass the flag.**
 
+To leave parts of the source folder out of the snapshot, pass `--exclude` one or more times (same pattern syntax as restic's own `--exclude`), e.g. to skip a live database directory that is dumped separately:
+
+```
+./backup.sh --exclude /home/user/app/data/postgres --exclude /home/user/app/data/tmp ... /home/user/app sftp:storage-server:/backups/app --verbose
+```
+
 For the integrity check (note it may take a long time to run for large repos), e.g.:
 
 ```

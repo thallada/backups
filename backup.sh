@@ -45,6 +45,8 @@ OPTIONS:
     --keep-yearly N             Keep N yearly snapshots (default: 2)
     
     BACKUP OPTIONS:
+    -e, --exclude PATTERN       Exclude files/dirs matching PATTERN (can be used multiple times,
+                                same syntax as restic --exclude)
     --no-exclude-caches         Don't exclude cache directories
     --no-one-file-system        Allow crossing filesystem boundaries
     --compression LEVEL         Compression level: auto|max|off|fastest|better (default: auto)
@@ -66,6 +68,10 @@ EXAMPLES:
     $0 -t production -t database --tag-prefix server1 \\
        --log-file /var/log/backup.log \\
        /var/lib/mysql sftp:user@host:/backups/mysql
+
+    # Exclude subdirectories from the backup
+    $0 --exclude /srv/app/data/postgres --exclude "/srv/app/data/app/tmp" \\
+       /srv/app sftp:user@host:/backups/app
 
 ENVIRONMENT VARIABLES:
     RESTIC_PASSWORD_FILE    Alternative to --password-file
@@ -115,6 +121,7 @@ send_healthcheck() {
 
 # Parse command line arguments
 CUSTOM_TAGS=()
+EXCLUDE_PATTERNS=()
 POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -153,6 +160,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --keep-yearly)
             KEEP_YEARLY="$2"
+            shift 2
+            ;;
+        -e|--exclude)
+            EXCLUDE_PATTERNS+=("$2")
             shift 2
             ;;
         --no-exclude-caches)
@@ -273,6 +284,9 @@ fi
 if [ "$ONE_FILE_SYSTEM" = true ]; then
     BACKUP_ARGS+=("--one-file-system")
 fi
+for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    BACKUP_ARGS+=("--exclude" "$(printf '%q' "$pattern")")
+done
 
 log_message "Starting backup of $SOURCE_PATH to $REPOSITORY"
 send_healthcheck "START" "Starting backup of $BACKUP_NAME"
