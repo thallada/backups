@@ -45,6 +45,12 @@ crontab -e
 
 You should automatically get emails when a backup fails or fails to run at all. Check the logs to see what went wrong.
 
+## Stale locks
+
+If a restic process dies mid-operation (e.g. the SFTP connection drops), it can leave a lock behind in the repo, which blocks `forget --prune` and `check` until it is removed. When a restic command fails because the repo is locked (exit code 11), both scripts run a plain `restic unlock` and retry once. Without `--remove-all`, restic only removes locks that are actually stale: created on this host by a process that no longer exists, or not refreshed in 30 minutes (running restic processes refresh their locks every 5 minutes). Locks held by running backups or checks are left alone, and the operation fails instead.
+
+If the integrity check reports that it "could not run" because the repo is locked, that is not corruption. Check the active locks with `restic -r <repo> list locks --no-lock` and re-run the check after the other operation finishes.
+
 ## Stats
 
 To see how much space a repo is taking up in the remote, run:

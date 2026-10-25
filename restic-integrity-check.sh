@@ -13,6 +13,9 @@ READ_DATA=true
 VERBOSE=false
 DRY_RUN=false
 
+# Restic exit code for "failed to lock repository" (restic >= 0.17.0)
+RESTIC_EXIT_LOCK_FAILED=11
+
 # Function to display usage
 usage() {
     cat << EOF
@@ -65,7 +68,11 @@ NOTES:
       and verifying all data blobs. This is slower but more comprehensive.
     - Use --no-read-data for faster checks that only verify repository
       structure and metadata.
-    - Exit codes: 0 = success, 1 = check failed or error occurred
+    - If the repository is locked, only stale locks (from dead processes or
+      not refreshed for 30 minutes) are removed before retrying once. Locks
+      held by running restic processes are never removed.
+    - Exit codes: 0 = success, 1 = check failed or error occurred,
+      11 = check could not run because the repository is locked
 
 EOF
 }
@@ -106,6 +113,34 @@ send_healthcheck() {
     esac
     
     [ "$VERBOSE" = true ] && echo "Healthcheck sent: $status - $message"
+}
+
+# Function to remove stale repository locks
+# Plain `restic unlock` (never --remove-all) only removes locks that restic
+# considers stale: created on this host by a process that no longer exists, or
+# not refreshed for 30 minutes. Running restic processes refresh their locks
+# every 5 minutes, so locks held by live operations are never removed.
+remove_stale_locks() {
+    log_message "Repository is locked, removing stale locks (if any)..."
+    local unlock_output=""
+    if unlock_output=$(eval "$RESTIC_CMD unlock" 2>&1); then
+        log_message "Unlock output: $unlock_output"
+    else
+        log_message "WARNING: Failed to remove stale locks: $unlock_output"
+    fi
+}
+
+# Function to run a command, retrying once after removing stale locks if it
+# failed only because the repository was locked
+with_stale_lock_retry() {
+    local status=0
+    "$@" || status=$?
+    if [ "$status" -eq "$RESTIC_EXIT_LOCK_FAILED" ]; then
+        remove_stale_locks
+        status=0
+        "$@" || status=$?
+    fi
+    return "$status"
 }
 
 # Parse command line arguments
@@ -215,7 +250,7 @@ fi
 # Test repository connectivity first
 log_message "Testing repository connectivity..."
 CONNECTIVITY_OUTPUT=""
-if ! CONNECTIVITY_OUTPUT=$(eval "$RESTIC_CMD snapshots --last" 2>&1); then
+if ! CONNECTIVITY_OUTPUT=$(eval "$RESTIC_CMD snapshots --no-lock --latest 1" 2>&1); then
     log_message "ERROR: Cannot connect to repository or repository is empty"
     if [ "$VERBOSE" = true ]; then
         log_message "Connectivity error: $CONNECTIVITY_OUTPUT"
@@ -235,21 +270,21 @@ log_message "Running repository integrity check..."
 START_TIME=$(date +%s)
 
 CHECK_OUTPUT=""
-CHECK_SUCCESS=false
+CHECK_EXIT=0
 
-if [ "$VERBOSE" = true ]; then
-    # Show progress in verbose mode
-    if eval "$RESTIC_CMD check ${CHECK_ARGS[*]}"; then
-        CHECK_SUCCESS=true
+run_check() {
+    if [ "$VERBOSE" = true ]; then
+        # Show progress in verbose mode
+        eval "$RESTIC_CMD check ${CHECK_ARGS[*]}"
+    else
+        # Capture output for logging
+        CHECK_OUTPUT=$(eval "$RESTIC_CMD check ${CHECK_ARGS[*]}" 2>&1)
     fi
-else
-    # Capture output for logging
-    if CHECK_OUTPUT=$(eval "$RESTIC_CMD check ${CHECK_ARGS[*]}" 2>&1); then
-        CHECK_SUCCESS=true
-    fi
-fi
+}
 
-if [ "$CHECK_SUCCESS" = true ]; then
+with_stale_lock_retry run_check || CHECK_EXIT=$?
+
+if [ "$CHECK_EXIT" -eq 0 ]; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     
@@ -281,6 +316,21 @@ if [ "$CHECK_SUCCESS" = true ]; then
         fi
         [ -n "$CHECK_OUTPUT" ] && echo -e "\nDetailed output:\n$CHECK_OUTPUT"
     fi
+elif [ "$CHECK_EXIT" -eq "$RESTIC_EXIT_LOCK_FAILED" ]; then
+    # The check never ran, so this says nothing about repository integrity
+    ERROR_MSG="Integrity check for $REPO_NAME could not run: repository is locked by another active restic process (not a corruption issue). Re-run once it finishes."
+    log_message "$ERROR_MSG"
+    send_healthcheck "FAILED" "$ERROR_MSG"
+
+    if [ "$VERBOSE" = true ]; then
+        echo "=== Check Summary ==="
+        echo "Repository: $REPOSITORY"
+        echo "Result: NOT RUN (repository locked)"
+        echo "Check active locks with: restic -r $REPOSITORY list locks --no-lock"
+        [ -n "$CHECK_OUTPUT" ] && echo -e "\nError output:\n$CHECK_OUTPUT"
+    fi
+
+    exit "$RESTIC_EXIT_LOCK_FAILED"
 else
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))

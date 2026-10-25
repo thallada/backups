@@ -20,6 +20,9 @@ EXCLUDE_CACHES=true
 ONE_FILE_SYSTEM=true
 COMPRESSION="auto"
 
+# Restic exit code for "failed to lock repository" (restic >= 0.17.0)
+RESTIC_EXIT_LOCK_FAILED=11
+
 # Function to display usage
 usage() {
     cat <<EOF
@@ -117,6 +120,34 @@ send_healthcheck() {
     esac
 
     [ "$VERBOSE" = true ] && echo "Healthcheck sent: $status - $message"
+}
+
+# Function to remove stale repository locks
+# Plain `restic unlock` (never --remove-all) only removes locks that restic
+# considers stale: created on this host by a process that no longer exists, or
+# not refreshed for 30 minutes. Running restic processes refresh their locks
+# every 5 minutes, so locks held by live operations are never removed.
+remove_stale_locks() {
+    log_message "Repository is locked, removing stale locks (if any)..."
+    local unlock_output=""
+    if unlock_output=$(eval "$RESTIC_CMD unlock" 2>&1); then
+        log_message "Unlock output: $unlock_output"
+    else
+        log_message "WARNING: Failed to remove stale locks: $unlock_output"
+    fi
+}
+
+# Function to run a command, retrying once after removing stale locks if it
+# failed only because the repository was locked
+with_stale_lock_retry() {
+    local status=0
+    "$@" || status=$?
+    if [ "$status" -eq "$RESTIC_EXIT_LOCK_FAILED" ]; then
+        remove_stale_locks
+        status=0
+        "$@" || status=$?
+    fi
+    return "$status"
 }
 
 # Parse command line arguments
@@ -294,7 +325,7 @@ send_healthcheck "START" "Starting backup of $BACKUP_NAME"
 # Pre-backup: Check repository connectivity
 log_message "Checking repository connectivity..."
 CONNECTIVITY_OUTPUT=""
-if ! CONNECTIVITY_OUTPUT=$(eval "$RESTIC_CMD snapshots --latest 1" 2>&1); then
+if ! CONNECTIVITY_OUTPUT=$(eval "$RESTIC_CMD snapshots --no-lock --latest 1" 2>&1); then
     log_message "WARNING: Could not connect to repository or no snapshots exist yet"
     if [ "$VERBOSE" = true ]; then
         log_message "Connectivity check output: $CONNECTIVITY_OUTPUT"
@@ -314,16 +345,18 @@ log_message "Running command: $RESTIC_CMD backup \"$SOURCE_PATH\" ${TAG_ARGS[*]}
 BACKUP_OUTPUT=""
 BACKUP_SUCCESS=false
 
-if [ "$VERBOSE" = true ]; then
-    # Show progress in verbose mode
-    if eval "$RESTIC_CMD backup \"$SOURCE_PATH\" ${TAG_ARGS[*]} ${BACKUP_ARGS[*]}"; then
-        BACKUP_SUCCESS=true
+run_backup() {
+    if [ "$VERBOSE" = true ]; then
+        # Show progress in verbose mode
+        eval "$RESTIC_CMD backup \"$SOURCE_PATH\" ${TAG_ARGS[*]} ${BACKUP_ARGS[*]}"
+    else
+        # Capture output for logging
+        BACKUP_OUTPUT=$(eval "$RESTIC_CMD backup \"$SOURCE_PATH\" ${TAG_ARGS[*]} ${BACKUP_ARGS[*]}" 2>&1)
     fi
-else
-    # Capture output for logging
-    if BACKUP_OUTPUT=$(eval "$RESTIC_CMD backup \"$SOURCE_PATH\" ${TAG_ARGS[*]} ${BACKUP_ARGS[*]}" 2>&1); then
-        BACKUP_SUCCESS=true
-    fi
+}
+
+if with_stale_lock_retry run_backup; then
+    BACKUP_SUCCESS=true
 fi
 
 if [ "$BACKUP_SUCCESS" = true ]; then
@@ -335,7 +368,10 @@ if [ "$BACKUP_SUCCESS" = true ]; then
     # Clean up old snapshots according to retention policy
     log_message "Applying retention policy..."
     FORGET_OUTPUT=""
-    if FORGET_OUTPUT=$(eval "$RESTIC_CMD forget --tag $BACKUP_NAME --keep-daily $KEEP_DAILY --keep-weekly $KEEP_WEEKLY --keep-monthly $KEEP_MONTHLY --keep-yearly $KEEP_YEARLY --prune" 2>&1); then
+    run_forget() {
+        FORGET_OUTPUT=$(eval "$RESTIC_CMD forget --tag $BACKUP_NAME --keep-daily $KEEP_DAILY --keep-weekly $KEEP_WEEKLY --keep-monthly $KEEP_MONTHLY --keep-yearly $KEEP_YEARLY --prune" 2>&1)
+    }
+    if with_stale_lock_retry run_forget; then
         log_message "Retention policy applied successfully"
 
         # Get backup stats for healthcheck message
